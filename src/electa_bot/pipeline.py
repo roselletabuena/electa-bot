@@ -58,6 +58,7 @@ class Pipeline:
 
         self.repos.prune_stale()
         issues = self.jira.search(self.cfg.jira.jql, max_results=budget)
+        log.info("poll: %d ticket(s) matched (budget %d)", len(issues), budget)
         outcomes = [self.process(issue) for issue in issues[:budget]]
         if outcomes:
             self.notifier.send(self.summary(outcomes))

@@ -26,11 +26,10 @@ name = "roselletabuena/electa-fullstack"
 default_branch = "main"
 jira_projects = ["VS"]
 setup_commands = ["npm ci", "npx prisma generate", "npm run agents:sync"]   # run BEFORE the engine; agents:sync mirrors .agents/skills into .claude/skills for Claude
-check_commands = [              # all must pass (mirrors app-ci.yml)
+check_commands = [              # all must pass; exactly what app-ci.yml runs (lint, typecheck, unit tests)
   "npm run typecheck",
   "npm run lint",
   "npm run test:unit",
-  "npm run format:check",
 ]
 allowed_paths = ["src/", "tests/", "public/"]
 denied_paths = [".github/", "infra/", "prisma/migrations/", ".agents/", ".env*", "package-lock.json"]

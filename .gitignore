@@ -6,3 +6,5 @@ __pycache__/
 config.toml
 *.log
 .vscode/
+logs/
+*.log
