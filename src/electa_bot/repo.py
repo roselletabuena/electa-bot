@@ -141,6 +141,10 @@ class RepoManager:
             lines += (int(added) if added.isdigit() else 0) + (int(deleted) if deleted.isdigit() else 0)
         return Changes(files=files, lines=lines)
 
+    def diff_text(self, worktree: Path, base: str) -> str:
+        """Full staged diff against `base` (call after collect_changes, which stages everything)."""
+        return self._git("diff", "--cached", base, cwd=worktree)
+
     def commit(self, worktree: Path, message: str, base: str) -> None:
         """One bot-authored commit on top of `base` (squashing any commits the engine made).
 

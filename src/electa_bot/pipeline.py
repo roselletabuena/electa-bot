@@ -10,7 +10,8 @@ from .engine.base import CodeEngine
 from .github import GitHubClient
 from .jira import Issue, JiraClient
 from .notify import Notifier
-from .prompt import build_pr_body, build_repair_prompt, build_task_prompt
+from .pr_description import build_description
+from .prompt import build_repair_prompt, build_task_prompt
 from .repo import RepoManager, slugify
 from .state import State
 
@@ -121,7 +122,8 @@ class Pipeline:
         # for a bounded number of repair rounds; each round re-verifies the diff before re-checking.
         repairs = 0
         while True:
-            failed = self._first_failure(guardrails.run_commands(repo.check_commands, worktree, extra_env=npm_cache))
+            check_results = guardrails.run_commands(repo.check_commands, worktree, extra_env=npm_cache)
+            failed = self._first_failure(check_results)
             if failed is None:
                 break
             if repairs >= self.cfg.repair_rounds:
@@ -150,13 +152,15 @@ class Pipeline:
         self.repos.commit(worktree, f"{issue.key}: {issue.summary}", base)
         self.repos.push(worktree, branch)
         template = self._read(worktree / ".github" / "pull_request_template.md")
-        body = build_pr_body(
-            f"{self.cfg.jira.base_url}/browse/{issue.key}",
+        body = build_description(
+            self.engine,
             issue,
-            result.response,
+            self.cfg.jira.base_url,
             template,
-            [*repo.setup_commands, *repo.check_commands],
+            self.repos.diff_text(worktree, base),
+            check_results,
             repairs,
+            self.cfg.engine_timeout_s,
         )
         pr = self.github.open_draft_pr(
             repo.name, branch, repo.default_branch, f"{issue.key}: {issue.summary}", body, labels=["bot"]

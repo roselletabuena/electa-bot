@@ -13,6 +13,8 @@ class Issue:
     project: str
     status: str = ""
     labels: list[str] = field(default_factory=list)
+    parent_key: str = ""  # parent epic, when the ticket has one
+    parent_summary: str = ""
 
 
 def adf_to_text(node: object) -> str:
@@ -62,6 +64,8 @@ class JiraClient:
             project=f.get("project", {}).get("key", raw["key"].split("-")[0]),
             status=(f.get("status") or {}).get("name", ""),
             labels=list(f.get("labels") or []),
+            parent_key=(f.get("parent") or {}).get("key", ""),
+            parent_summary=((f.get("parent") or {}).get("fields") or {}).get("summary", ""),
         )
 
     def search(self, jql: str, max_results: int = 25) -> list[Issue]:
@@ -70,7 +74,7 @@ class JiraClient:
             json={
                 "jql": jql,
                 "maxResults": max_results,
-                "fields": ["summary", "description", "project", "status", "labels"],
+                "fields": ["summary", "description", "project", "status", "labels", "parent"],
             },
             timeout=30,
         )

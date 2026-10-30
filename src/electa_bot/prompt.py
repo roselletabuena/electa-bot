@@ -78,16 +78,44 @@ def build_triage_prompt(issue: Issue) -> str:
     )
 
 
-def build_pr_body(
-    issue_url: str, issue: Issue, summary: str, template: str, checks: list[str], repairs: int = 0
-) -> str:
+def build_pr_description_prompt(issue: Issue, jira_base_url: str, template: str, diff: str) -> str:
+    epic = (
+        f"{issue.parent_key}: {issue.parent_summary} ({jira_base_url}/browse/{issue.parent_key})"
+        if issue.parent_key
+        else "none (this ticket has no parent epic)"
+    )
+    return (
+        "PR DESCRIPTION. Do not modify any files and do not run any commands.\n"
+        f"{_TICKET_NOTE}\n\n"
+        f"{_ticket_block(issue)}\n"
+        f"Ticket link: {jira_base_url}/browse/{issue.key}\n"
+        f"Parent epic: {epic}\n\n"
+        f"<template>\n{template.strip()}\n</template>\n\n"
+        f"<diff>\n{diff.strip()}\n</diff>\n\n"
+        "Fill in the pull request template above for this change and reply with ONLY the completed "
+        "markdown: no code fence around it and no commentary.\n"
+        "Rules:\n"
+        "- Keep every heading, emoji, section order and horizontal rule exactly as in the template.\n"
+        "- Jira section: replace the VS-XX placeholders with the real parent epic and this ticket "
+        "(key, title and link). If there is no parent epic, write 'None'.\n"
+        "- Executive Summary: 2-4 sentences covering the problem or user story and what this PR does.\n"
+        "- Key Architectural & Code Changes: describe only what the diff shows. Name the real "
+        "directories and files touched (do not leave `<slice>` placeholders), and delete empty "
+        "placeholder bullets.\n"
+        "- Do NOT tick any checkbox, and leave the Testing & Verification checkboxes and its ```text "
+        "block exactly as they are: the bot fills them from real results.\n"
+        "- Leave the whole Constitution Compliance checklist unticked; the human reviewer confirms it.\n"
+        "- Visual Evidence: write 'N/A - Non-UI change' when the diff touches no UI files.\n"
+        "- Do not invent anything that the ticket or diff does not support."
+    )
+
+
+def build_pr_body(issue_url: str, issue: Issue, results: list, repairs: int = 0) -> str:
+    """Fallback description, used only when the repo has no PR template or filling it failed."""
     parts = [f"Jira: [{issue.key}]({issue_url}) - {issue.summary}"]
-    if summary.strip():
-        parts.append(f"## Summary\n{summary.strip()[:2000]}")
-    if checks:
+    passed = [f"- [x] `{r.command}`" for r in results if r.ok]
+    if passed:
         note = f" after {repairs} automatic fix round(s)" if repairs else ""
-        parts.append(f"## Checks run by the bot (all passed{note})\n" + "\n".join(f"- `{c}`" for c in checks))
-    if template.strip():
-        parts.append("---\n" + template.strip())
+        parts.append(f"## Checks run by the bot (all passed{note})\n" + "\n".join(passed))
     parts.append("_Opened as a draft by electa-bot. Please review before merging._")
     return "\n\n".join(parts)

@@ -16,6 +16,38 @@ from electa_bot.state import State
 
 GIT_ID = ["-c", "user.name=t", "-c", "user.email=t@t"]
 
+TEMPLATE = """## 📌 Jira Ticket & Epic Links
+
+- **Parent Epic**: [VS-XX: Epic Name](https://x.example/browse/VS-XX)
+
+---
+
+## 🎯 Executive Summary
+
+<!-- Concise summary of the objective. -->
+
+---
+
+## 🧪 Testing & Verification Report
+
+- [ ] **Check**: `python -c "print(1)"`
+- [ ] **Not run by the bot**: `npm run something-else`
+
+```text
+<!-- Paste terminal test output here -->
+```
+
+---
+
+## 🏛️ Constitution Compliance Checklist
+
+- [ ] **§I**: Strict type safety.
+"""
+
+FILLED = TEMPLATE.replace("[VS-XX: Epic Name](https://x.example/browse/VS-XX)", "None").replace(
+    "<!-- Concise summary of the objective. -->", "Changes the greeting for ELE-1 to say hello electa."
+)
+
 
 def git(*args: str, cwd: Path) -> str:
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
@@ -31,6 +63,8 @@ def origin(tmp_path: Path) -> Path:
     (seed / "src").mkdir()
     (seed / "src" / "app.txt").write_text("hello\n")
     (seed / "AGENTS.md").write_text("Be careful.\n")
+    (seed / ".github").mkdir()
+    (seed / ".github" / "pull_request_template.md").write_text(TEMPLATE, encoding="utf-8")
     git("add", "-A", cwd=seed)
     git(*GIT_ID, "commit", "-m", "init", cwd=seed)
     git("remote", "add", "origin", str(bare), cwd=seed)
@@ -95,7 +129,9 @@ class FakeEngine:
         repair_fail=False,
         commits=False,
         marker: Path | None = None,
+        description: str = "ok",  # ok | garbage | fail: how the PR-description call behaves
     ):
+        self.description = description
         self.ready = ready
         self.edits = {"src/app.txt": "hello electa\n"} if edits is None else edits
         self.fail = fail
@@ -117,6 +153,12 @@ class FakeEngine:
         if prompt.startswith("READINESS CHECK"):
             body = '{"ready": true, "questions": []}' if self.ready else '{"ready": false, "questions": ["Which page?"]}'
             return EngineResult(ok=True, response=body)
+        if prompt.startswith("PR DESCRIPTION"):
+            if self.description == "fail":
+                return EngineResult(ok=False, error="description call crashed")
+            if self.description == "garbage":
+                return EngineResult(ok=True, response="Sure, here is a PR about greetings.")
+            return EngineResult(ok=True, response=FILLED)
         if prompt.startswith("REPAIR"):
             if self.repair_fail:
                 return EngineResult(ok=False, error="repair crashed")
