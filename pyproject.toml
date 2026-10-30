@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "electa-bot"
+version = "0.1.0"
+description = "Polls Jira for ready tickets, has a coding agent implement them, and opens draft GitHub PRs."
+requires-python = ">=3.11"
+dependencies = [
+  "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "requests-mock>=1.12",
+]
+
+[project.scripts]
+electa-bot = "electa_bot.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
