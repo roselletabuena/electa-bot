@@ -16,6 +16,11 @@ base_url = "https://the-three-devsketeers.atlassian.net"
 jql = 'project = VS AND labels = electa-bot AND labels != bot-claimed AND status = "Ready for Bot" ORDER BY created ASC'
 claimed_label = "bot-claimed"
 
+[jira.workflow_labels]          # optional: a ticket with one of these labels skips routing and runs that workflow
+bugfix = "bot-bugfix"
+feature = "bot-feature"         # new Spec Kit feature: specify -> plan -> tasks -> implement
+amend = "bot-amend"             # change to a feature that already has specs/NNN-*; quote the folder in the ticket
+
 [jira.transitions]              # Jira transition names in your workflow
 in_progress = "In Progress"
 in_review = "In Review"
@@ -34,3 +39,5 @@ check_commands = [              # all must pass; exactly what app-ci.yml runs (l
 allowed_paths = ["src/", "tests/", "public/"]
 denied_paths = [".github/", "infra/", "prisma/migrations/", ".agents/", ".env*", "package-lock.json"]
 max_diff_lines = 300
+spec_dir = "specs"              # Spec Kit folders; feature/amend runs may write here in addition to allowed_paths
+spec_max_diff_lines = 1500      # diff cap for feature/amend runs (spec docs + code)

@@ -10,10 +10,12 @@ from .engine.base import CodeEngine
 from .github import GitHubClient
 from .jira import Issue, JiraClient
 from .notify import Notifier
+from .orchestrator import RoutingError, route_ticket
 from .pr_description import build_description
-from .prompt import build_repair_prompt, build_task_prompt
+from .prompt import build_repair_prompt
 from .repo import RepoManager, slugify
 from .state import State
+from .workflows import Plan, build_plan
 
 log = logging.getLogger("electa_bot")
 
@@ -24,6 +26,7 @@ class Outcome:
     status: str  # pr_opened | dry_run_ok | needs_info | failed | skipped
     detail: str = ""
     pr_url: str | None = None
+    workflow: str = ""  # bugfix | feature | amend | task, once the ticket has been routed
 
 
 class Pipeline:
@@ -68,7 +71,9 @@ class Pipeline:
     @staticmethod
     def summary(outcomes: list[Outcome]) -> str:
         lines = [f"electa-bot run: {len(outcomes)} ticket(s)"]
-        lines += [f"- {o.key}: {o.status}" + (f" {o.pr_url}" if o.pr_url else f" ({o.detail})" if o.detail else "") for o in outcomes]
+        for o in outcomes:
+            tail = f" {o.pr_url}" if o.pr_url else f" ({o.detail})" if o.detail else ""
+            lines.append(f"- {o.key}: {o.status}" + (f" [{o.workflow}]" if o.workflow else "") + tail)
         return "\n".join(lines)
 
     # -- one ticket ----------------------------------------------------------------------------
@@ -87,36 +92,50 @@ class Pipeline:
 
         readiness = triage.check_readiness(self.engine, issue, self.cfg.engine_timeout_s)
         if not readiness.ready:
-            questions = "\n".join(f"- {q}" for q in readiness.questions)
-            self._write(self.jira.remove_label, issue.key, self.cfg.jira.claimed_label)
-            self._say(issue, f"The bot needs more detail before it can implement this:\n{questions}")
-            self._move(issue, "needs_info")
-            return self._finish(Outcome(issue.key, "needs_info", questions))
+            return self._bounce(issue, "The bot needs more detail before it can implement this", readiness.questions)
 
         branch = f"bot/{issue.key}-{slugify(issue.summary)}"
         worktree = self.repos.create_worktree(repo, branch)
         try:
             base = self.repos.head_sha(worktree)
-            return self._implement(issue, repo, branch, worktree, base)
+            agents_md = self._read(worktree / "AGENTS.md")
+            try:
+                route = route_ticket(issue, worktree, repo, self.cfg, self.engine)
+            except RoutingError as exc:
+                return self._bounce(issue, "The bot could not tell which workflow this ticket needs", exc.questions)
+            log.info("%s: workflow %s (%s)", issue.key, route.workflow, route.reason)
+            self._say(issue, f"Workflow: {route.workflow} ({route.reason}).")
+            plan = build_plan(route, issue, repo, worktree, self.cfg, agents_md)
+            return self._implement(issue, repo, plan, branch, worktree, base)
         finally:
             self.repos.remove_worktree(repo, worktree)
 
-    def _implement(self, issue: Issue, repo: RepoConfig, branch: str, worktree: Path, base: str) -> Outcome:
+    def _implement(self, issue: Issue, repo: RepoConfig, plan: Plan, branch: str, worktree: Path, base: str) -> Outcome:
         # Setup runs BEFORE the engine so the repo's own tooling (node_modules, lint hooks, a skills
         # sync) is in place while the agent edits. Setup output is re-checked by the final diff guard.
         npm_cache = {"npm_config_cache": str(self.cfg.work_dir / "npm-cache")}
         failed = self._first_failure(guardrails.run_commands(repo.setup_commands, worktree, extra_env=npm_cache))
         if failed:
-            return self._fail(issue, f"Setup `{failed.command}` failed:\n{failed.output_tail}")
+            return self._fail(issue, f"Setup `{failed.command}` failed:\n{failed.output_tail}", plan.workflow)
 
-        agents_md = self._read(worktree / "AGENTS.md")
-        result = self.engine.run(worktree, build_task_prompt(issue, repo, agents_md), self.cfg.engine_timeout_s)
-        if not result.ok:
-            return self._fail(issue, f"The coding engine failed: {result.error}")
-
-        problems = guardrails.check_changes(self.repos.collect_changes(worktree, base), repo)
-        if problems:
-            return self._fail(issue, "Guardrails rejected the change:\n" + "\n".join(f"- {p}" for p in problems))
+        rules = plan.repo  # spec workflows may also write the spec folder, with a larger diff cap
+        for stage in plan.stages:
+            during = f" during the {stage.name} stage" if len(plan.stages) > 1 else ""
+            result = self.engine.run(worktree, stage.prompt, self.cfg.engine_timeout_s)
+            if not result.ok:
+                return self._fail(issue, f"The coding engine failed{during}: {result.error}", plan.workflow)
+            handback = stage.halts(result.response)
+            if handback:  # e.g. a bugfix the agent judged to need a product decision: no code, a human answers
+                return self._bounce(issue, "The bot stopped without changing code", [handback], plan.workflow)
+            changes = self.repos.collect_changes(worktree, base)
+            problems = guardrails.check_changes(changes, rules)
+            if problems:
+                bullets = "\n".join(f"- {p}" for p in problems)
+                return self._fail(issue, f"Guardrails rejected the change{during}:\n{bullets}", plan.workflow)
+            problem = stage.verify(worktree, changes.files, result.response)
+            if problem:
+                log.warning("%s: %s stage incomplete; engine reply:\n%s", issue.key, stage.name, result.response.strip())
+                return self._fail(issue, f"The {stage.name} stage is incomplete: {problem}", plan.workflow)
 
         # Checks may fail on code the engine just wrote (lint, types, tests). Feed the failure back
         # for a bounded number of repair rounds; each round re-verifies the diff before re-checking.
@@ -128,26 +147,29 @@ class Pipeline:
                 break
             if repairs >= self.cfg.repair_rounds:
                 suffix = f" (after {repairs} repair attempt(s))" if repairs else ""
-                return self._fail(issue, f"`{failed.command}` failed{suffix}:\n{failed.output_tail}")
+                return self._fail(issue, f"`{failed.command}` failed{suffix}:\n{failed.output_tail}", plan.workflow)
             repairs += 1
             log.info("%s: `%s` failed; repair round %d/%d", issue.key, failed.command, repairs, self.cfg.repair_rounds)
             fix = self.engine.run(
-                worktree, build_repair_prompt(issue, repo, failed.command, failed.output_tail), self.cfg.engine_timeout_s
+                worktree, build_repair_prompt(issue, rules, failed.command, failed.output_tail), self.cfg.engine_timeout_s
             )
             if not fix.ok:
-                return self._fail(issue, f"The coding engine failed during repair: {fix.error}")
-            problems = guardrails.check_changes(self.repos.collect_changes(worktree, base), repo)
+                return self._fail(issue, f"The coding engine failed during repair: {fix.error}", plan.workflow)
+            problems = guardrails.check_changes(self.repos.collect_changes(worktree, base), rules)
             if problems:
-                return self._fail(issue, "Guardrails rejected the repaired change:\n" + "\n".join(f"- {p}" for p in problems))
+                bullets = "\n".join(f"- {p}" for p in problems)
+                return self._fail(issue, f"Guardrails rejected the repaired change:\n{bullets}", plan.workflow)
 
         # Setup/checks can modify files (lockfiles, formatters), so re-verify the final diff.
         changes = self.repos.collect_changes(worktree, base)
-        problems = guardrails.check_changes(changes, repo)
+        problems = guardrails.check_changes(changes, rules)
         if problems:
-            return self._fail(issue, "Guardrails rejected the final change:\n" + "\n".join(f"- {p}" for p in problems))
+            bullets = "\n".join(f"- {p}" for p in problems)
+            return self._fail(issue, f"Guardrails rejected the final change:\n{bullets}", plan.workflow)
 
         if self.dry_run:
-            return Outcome(issue.key, "dry_run_ok", f"{len(changes.files)} file(s), {changes.lines} line(s)")
+            detail = f"{len(changes.files)} file(s), {changes.lines} line(s)"
+            return Outcome(issue.key, "dry_run_ok", detail, workflow=plan.workflow)
 
         self.repos.commit(worktree, f"{issue.key}: {issue.summary}", base)
         self.repos.push(worktree, branch)
@@ -167,7 +189,7 @@ class Pipeline:
         )
         self._say(issue, f"Draft PR opened: {pr.url}")
         self._move(issue, "in_review")
-        return self._finish(Outcome(issue.key, "pr_opened", pr_url=pr.url))
+        return self._finish(Outcome(issue.key, "pr_opened", pr_url=pr.url, workflow=plan.workflow))
 
     # -- helpers -------------------------------------------------------------------------------
     @staticmethod
@@ -200,7 +222,15 @@ class Pipeline:
         elif not self.jira.transition(issue.key, name):
             log.warning("%s: no transition named %r available", issue.key, name)
 
-    def _fail(self, issue: Issue, reason: str) -> Outcome:
+    def _bounce(self, issue: Issue, intro: str, questions: list[str], workflow: str = "") -> Outcome:
+        """Hand the ticket back with questions and release the claim so it can be picked up again."""
+        text = "\n".join(f"- {q}" for q in questions)
+        self._write(self.jira.remove_label, issue.key, self.cfg.jira.claimed_label)
+        self._say(issue, f"{intro}:\n{text}")
+        self._move(issue, "needs_info")
+        return self._finish(Outcome(issue.key, "needs_info", text, workflow=workflow))
+
+    def _fail(self, issue: Issue, reason: str, workflow: str = "") -> Outcome:
         # The claimed label stays so the ticket is not re-picked; a human decides what happens next.
         try:
             self._say(issue, f"The bot could not complete this ticket.\n{reason}")
@@ -208,7 +238,7 @@ class Pipeline:
         except Exception:  # reporting must not mask the original failure
             log.exception("could not report failure on %s", issue.key)
         self.notifier.send(f"electa-bot: {issue.key} failed: {reason[:300]}")
-        return self._finish(Outcome(issue.key, "failed", reason))
+        return self._finish(Outcome(issue.key, "failed", reason, workflow=workflow))
 
     def _finish(self, outcome: Outcome) -> Outcome:
         if not self.dry_run:

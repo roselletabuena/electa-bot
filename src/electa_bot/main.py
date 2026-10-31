@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         pipeline.state.close()
 
     for o in outcomes:
-        print(f"{o.key}: {o.status}" + (f" {o.pr_url}" if o.pr_url else f" - {o.detail}" if o.detail else ""))
+        print(f"{o.key}: {o.status}" + (f" [{o.workflow}]" if o.workflow else "") + (f" {o.pr_url}" if o.pr_url else f" - {o.detail}" if o.detail else ""))
     return 1 if any(o.status == "failed" for o in outcomes) else 0
 
 

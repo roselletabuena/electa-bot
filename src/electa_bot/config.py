@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import tomllib
@@ -17,6 +17,16 @@ class RepoConfig:
     allowed_paths: list[str] = field(default_factory=list)  # empty = anywhere not denied
     denied_paths: list[str] = field(default_factory=list)
     max_diff_lines: int = 300
+    spec_dir: str = "specs"  # where Spec Kit keeps one NNN-slug folder per feature
+    spec_max_diff_lines: int = 1500  # spec workflows write docs plus code, so they get a larger cap
+
+    def for_workflow(self, workflow: str) -> RepoConfig:
+        """This repo's rules as they apply to `workflow`: spec workflows may also write the spec folder."""
+        if workflow not in ("feature", "amend"):
+            return self
+        spec_root = self.spec_dir.strip("/") + "/"
+        allowed = self.allowed_paths + [spec_root] if self.allowed_paths else []
+        return replace(self, allowed_paths=allowed, max_diff_lines=self.spec_max_diff_lines)
 
 
 @dataclass
@@ -24,6 +34,10 @@ class JiraConfig:
     base_url: str
     jql: str
     claimed_label: str = "bot-claimed"
+    # A ticket carrying one of these labels skips classification and runs that workflow.
+    workflow_labels: dict[str, str] = field(
+        default_factory=lambda: {"bugfix": "bot-bugfix", "feature": "bot-feature", "amend": "bot-amend"}
+    )
     transitions: dict[str, str] = field(
         default_factory=lambda: {
             "in_progress": "In Progress",
@@ -89,6 +103,7 @@ def load_config(path: Path, env_file: Path | None = None) -> Config:
         claimed_label=jira_raw.get("claimed_label", "bot-claimed"),
     )
     jira.transitions.update(jira_raw.get("transitions", {}))
+    jira.workflow_labels.update(jira_raw.get("workflow_labels", {}))
 
     repos = [RepoConfig(**r) for r in raw.get("repos", [])]
     secrets = Secrets(

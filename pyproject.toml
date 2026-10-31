@@ -9,6 +9,7 @@ description = "Polls Jira for ready tickets, has a coding agent implement them, 
 requires-python = ">=3.11"
 dependencies = [
   "requests>=2.31",
+  "jinja2>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +23,9 @@ electa-bot = "electa_bot.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+electa_bot = ["prompts/*.md", "prompts/stages/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
