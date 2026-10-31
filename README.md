@@ -28,6 +28,26 @@ claim (label `bot-claimed` in Jira) -> readiness check (vague tickets get questi
 commands from config -> re-verify diff -> commit (repo hooks run) -> push -> draft PR -> comment + transition in Jira.
 Failures comment on the ticket, move it to the `needs_info` status, keep the claim label, and notify Slack if configured.
 
+## Workflows (orchestrator)
+After the readiness check the bot routes each ticket (`orchestrator.py`), cheapest signal first:
+1. a `bot-bugfix` / `bot-feature` / `bot-amend` label (configurable under `[jira.workflow_labels]`);
+2. Jira issue type `Bug` -> **bugfix**;
+3. the ticket quotes an existing `specs/NNN-slug` folder, or its key is the `**Jira Key**` of exactly one spec -> **amend**;
+4. otherwise the engine classifies it as bugfix / amend / feature / task (an unusable answer falls back to **task**).
+
+| Workflow | What runs |
+|---|---|
+| `bugfix` | one engine call following the repo's spec-aware bugfix method (class A-D); needs a changed test file; class D hands the ticket back with no code |
+| `feature` | `specify` -> `plan` -> `tasks` -> `implement` into a new `specs/<next number>-<slug>/`; each stage's artifact is verified before the next |
+| `amend` | `spec` -> `plan` -> `tasks` -> `implement` on the existing spec folder; new tasks are tagged `[KEY]` and only those are implemented |
+| `task` | the original single-shot minimal change |
+
+An amend with no resolvable spec is handed back to the ticket with a question instead of guessing.
+Feature/amend runs may also write `spec_dir` and use `spec_max_diff_lines`; they then share the normal setup, checks, repair rounds, commit and draft PR.
+
+## Editing prompts
+Every engine prompt is a Jinja template in `src/electa_bot/prompts/` (`task.md`, `bugfix.md`, `routing.md`, `stages/*.md`, ...); `prompt.py` only passes in variables. Shared pieces are in `_partials.md`, and the Spec Kit stages extend `stages/_base.md`. Undefined variables raise instead of rendering blank. Tests and the fake engine identify prompts by their first words (`REPAIR`, `BUGFIX`, `SPECKIT PLAN`, ...), so keep those.
+
 ## Engines
 - `antigravity`: `agy --mode accept-edits --sandbox --output-format json -p ...` (verified headless; needs AI credits).
 - `claude`: `claude -p ... --permission-mode acceptEdits` (written from docs, **untested**, CLI not installed here).

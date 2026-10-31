@@ -197,7 +197,7 @@ def test_task_prompt_lists_the_checks(build, repo_cfg):
     pipeline, _, _, _ = build(engine)
     pipeline.process(make_issue())
 
-    implement_prompt = engine.prompts[1]
+    implement_prompt = next(p for p in engine.prompts if p.startswith("You are implementing"))
     assert repo_cfg.check_commands[0] in implement_prompt
 
 

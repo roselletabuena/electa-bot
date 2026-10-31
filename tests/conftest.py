@@ -49,6 +49,11 @@ FILLED = TEMPLATE.replace("[VS-XX: Epic Name](https://x.example/browse/VS-XX)", 
 )
 
 
+TASK_ROUTE = '{"workflow": "task", "spec": null, "reason": "small change"}'
+
+SEED_SPEC = "# Feature Specification: Greeting\n\n**Jira Key**: [ELE-9](https://x.example/browse/ELE-9)\n"
+
+
 def git(*args: str, cwd: Path) -> str:
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
 
@@ -63,6 +68,9 @@ def origin(tmp_path: Path) -> Path:
     (seed / "src").mkdir()
     (seed / "src" / "app.txt").write_text("hello\n")
     (seed / "AGENTS.md").write_text("Be careful.\n")
+    (seed / "specs" / "001-greeting").mkdir(parents=True)
+    (seed / "specs" / "001-greeting" / "spec.md").write_text(SEED_SPEC)
+    (seed / "specs" / "001-greeting" / "tasks.md").write_text("- [x] T001 Say hello in src/app.txt\n")
     (seed / ".github").mkdir()
     (seed / ".github" / "pull_request_template.md").write_text(TEMPLATE, encoding="utf-8")
     git("add", "-A", cwd=seed)
@@ -130,7 +138,13 @@ class FakeEngine:
         commits=False,
         marker: Path | None = None,
         description: str = "ok",  # ok | garbage | fail: how the PR-description call behaves
+        route: str = TASK_ROUTE,  # raw reply to the routing prompt
+        stages: dict[str, dict[str, str]] | None = None,  # prompt prefix -> files that stage writes
+        stage_replies: dict[str, str] | None = None,  # prompt prefix -> reply text (default "done")
     ):
+        self.route = route
+        self.stages = stages or {}
+        self.stage_replies = stage_replies or {}
         self.description = description
         self.ready = ready
         self.edits = {"src/app.txt": "hello electa\n"} if edits is None else edits
@@ -153,6 +167,15 @@ class FakeEngine:
         if prompt.startswith("READINESS CHECK"):
             body = '{"ready": true, "questions": []}' if self.ready else '{"ready": false, "questions": ["Which page?"]}'
             return EngineResult(ok=True, response=body)
+        if prompt.startswith("ROUTING"):
+            return EngineResult(ok=True, response=self.route)
+        for prefix, files in self.stages.items():  # bugfix and Spec Kit stages
+            if prompt.startswith(prefix):
+                for rel, content in files.items():
+                    target = workdir / rel
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(content, encoding="utf-8")
+                return EngineResult(ok=True, response=self.stage_replies.get(prefix, "done"))
         if prompt.startswith("PR DESCRIPTION"):
             if self.description == "fail":
                 return EngineResult(ok=False, error="description call crashed")
@@ -178,8 +201,8 @@ class FakeEngine:
         return EngineResult(ok=True, response="Changed the greeting.")
 
 
-def make_issue(key="ELE-1", summary="Fix greeting", project="ELE") -> Issue:
-    return Issue(key=key, summary=summary, description="Say hello electa", project=project)
+def make_issue(key="ELE-1", summary="Fix greeting", project="ELE", description="Say hello electa", **fields) -> Issue:
+    return Issue(key=key, summary=summary, description=description, project=project, **fields)
 
 
 @pytest.fixture
