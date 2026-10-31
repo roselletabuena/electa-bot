@@ -19,6 +19,7 @@ Method:
   C = underspecified boundary: append the missing scenario to the spec's edge cases, add a boundary test, then the guard.
   D = the fix would break a contract/invariant or the constitution, or needs a product decision: change NOTHING and explain the trade-offs.
 - A regression test is mandatory for A, B and C.
+- ESCALATE: if the defect is B or C and the spec change is wide (many requirements, plan/tasks/contracts must change, `[NEEDS CLARIFICATION]` markers, missing artifacts), it is an amendment, not a bugfix. Change NOTHING, explain which spec and why, and put the line `ESCALATE: amend` before the final `CLASS:` line.
 {{ rules(repo) }}
 - You cannot run commands; the bot runs the repo's checks afterwards, so write lint-clean, typed code.
 - Finish with a short plain-text report (root cause, spec changes, code changes, regression test) whose LAST line is exactly `CLASS: A`, `CLASS: B`, `CLASS: C` or `CLASS: D`.

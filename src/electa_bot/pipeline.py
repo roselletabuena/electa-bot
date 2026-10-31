@@ -134,6 +134,7 @@ class Pipeline:
                 return self._fail(issue, f"Guardrails rejected the change{during}:\n{bullets}", plan.workflow)
             problem = stage.verify(worktree, changes.files, result.response)
             if problem:
+                log.warning("%s: %s stage incomplete; engine reply:\n%s", issue.key, stage.name, result.response.strip())
                 return self._fail(issue, f"The {stage.name} stage is incomplete: {problem}", plan.workflow)
 
         # Checks may fail on code the engine just wrote (lint, types, tests). Feed the failure back

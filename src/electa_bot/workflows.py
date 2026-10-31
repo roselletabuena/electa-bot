@@ -16,12 +16,13 @@ from .jira import Issue
 from .orchestrator import AMEND, BUGFIX, TASK, Route
 from .prompt import build_bugfix_prompt, build_stage_prompt, build_task_prompt
 from .repo import slugify
-from .specs import next_folder, unfinished_tasks
+from .specs import is_check_task, next_folder, unfinished_tasks
 
 Verify = Callable[[Path, list[str], str], "str | None"]  # (worktree, changed files, engine reply) -> problem
 Halts = Callable[[str], "str | None"]  # engine reply -> reason to hand the ticket back to a human
 
 _CLASS_D = re.compile(r"^\s*CLASS:\s*D\b", re.IGNORECASE | re.MULTILINE)
+_ESCALATE = re.compile(r"^\s*ESCALATE:\s*amend\b", re.IGNORECASE | re.MULTILINE)
 
 
 @dataclass
@@ -47,7 +48,7 @@ def build_plan(
         return Plan(TASK, rules, [Stage("implement", build_task_prompt(issue, rules, agents_md))])
     if route.workflow == BUGFIX:
         hint = f"{repo.spec_dir.strip('/')}/{route.spec.folder}" if route.spec else ""
-        return Plan(BUGFIX, rules, [_bugfix_stage(issue, rules, agents_md, hint)])
+        return Plan(BUGFIX, rules, [_bugfix_stage(issue, rules, agents_md, hint, cfg.jira.workflow_labels[AMEND])])
 
     spec_root = repo.spec_dir.strip("/")
     if route.workflow == AMEND:
@@ -76,7 +77,7 @@ def build_plan(
         return None if unfinished_tasks(text) else "tasks.md has no task lines"
 
     def implemented(w: Path, files: list[str], reply: str) -> str | None:
-        left = unfinished_tasks(_read(w / d / "tasks.md"), tag)
+        left = [t for t in unfinished_tasks(_read(w / d / "tasks.md"), tag) if not is_check_task(t)]
         if left:
             return f"{len(left)} task(s) left unfinished, first: {left[0]}"
         if all(f.startswith(f"{spec_root}/") for f in files):
@@ -94,8 +95,10 @@ def build_plan(
     return Plan(route.workflow, rules, stages)
 
 
-def _bugfix_stage(issue: Issue, repo: RepoConfig, agents_md: str, spec_hint: str) -> Stage:
+def _bugfix_stage(issue: Issue, repo: RepoConfig, agents_md: str, spec_hint: str, amend_label: str) -> Stage:
     def halts(reply: str) -> str | None:
+        if _ESCALATE.search(reply):  # a wide spec change is a spec amendment, not a bugfix a human has not reviewed
+            return f"{reply.strip()}\nTo continue, add the `{amend_label}` label and quote the spec folder in the ticket."
         return reply.strip() if _CLASS_D.search(reply) else None
 
     def verify(worktree: Path, files: list[str], reply: str) -> str | None:

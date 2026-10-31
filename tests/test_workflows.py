@@ -9,7 +9,7 @@ from conftest import SEED_SPEC, FakeEngine, git, make_issue
 from electa_bot import orchestrator
 from electa_bot.config import RepoConfig
 from electa_bot.engine.base import EngineResult
-from electa_bot.specs import list_specs, next_folder, unfinished_tasks
+from electa_bot.specs import is_check_task, list_specs, next_folder, unfinished_tasks
 
 BRANCH = "bot/ELE-1-fix-greeting"
 
@@ -45,6 +45,14 @@ def test_unfinished_tasks_can_be_scoped_to_a_ticket():
     text = "- [x] T001 done\n- [ ] T002 old\n- [ ] T003 [ELE-1] new\n- [x] T004 [ELE-1] done\n"
     assert unfinished_tasks(text) == ["- [ ] T002 old", "- [ ] T003 [ELE-1] new"]
     assert unfinished_tasks(text, "[ELE-1]") == ["- [ ] T003 [ELE-1] new"]
+
+
+def test_check_tasks_are_recognised_narrowly():
+    gates = "- [ ] T032 [ELE-1] Run quality gates (`npm run test:unit`, `npm run lint`) in src/a.ts"
+    assert is_check_task(gates)
+    assert is_check_task("- [ ] T034 [ELE-1] Run Vitest (`npm run test:unit`) and `npx eslint`")
+    assert not is_check_task("- [ ] T003 [ELE-1] Add an `npm run seed` script to package.json")
+    assert not is_check_task("- [ ] T004 [ELE-1] Run the aggregation in src/totals.ts")
 
 
 def test_spec_workflows_may_write_the_spec_folder_with_a_larger_cap():
@@ -154,6 +162,17 @@ def test_bugfix_that_needs_a_decision_goes_back_to_the_human_without_code(build)
 
     assert (outcome.status, outcome.workflow) == ("needs_info", "bugfix")
     assert "vote-count contract" in outcome.detail
+    assert ("remove_label", "ELE-1", "bot-claimed") in jira.calls
+    assert not gh.opened
+
+
+def test_bugfix_with_a_wide_spec_change_is_escalated_to_a_human_without_code(build):
+    reply = "Class B: the spec's whole tally section is stale.\nESCALATE: amend\nCLASS: B"
+    pipeline, jira, gh, _ = build(FakeEngine(stages={"BUGFIX": {}}, stage_replies={"BUGFIX": reply}))
+    outcome = pipeline.process(bug())
+
+    assert (outcome.status, outcome.workflow) == ("needs_info", "bugfix")
+    assert "tally section is stale" in outcome.detail and "`bot-amend` label" in outcome.detail
     assert ("remove_label", "ELE-1", "bot-claimed") in jira.calls
     assert not gh.opened
 
@@ -272,6 +291,12 @@ def test_amend_ignores_old_unfinished_tasks_but_not_its_own(build):
     left = amend_stages(**{"SPECKIT AMEND IMPLEMENT": {f"{AMEND_SPEC}/tasks.md": own_open, "src/app.txt": "hi\n"}})
     outcome = build(FakeEngine(stages=left))[0].process(make_issue(description=AMEND_TEXT))
     assert outcome.status == "failed" and "left unfinished" in outcome.detail
+
+
+def test_amend_does_not_block_on_a_quality_gate_task(build):
+    tasks = "- [x] T002 [ELE-1] shorten in src/app.txt\n- [ ] T003 [ELE-1] Run quality gates (`npm run lint`)\n"
+    done = amend_stages(**{"SPECKIT AMEND IMPLEMENT": {f"{AMEND_SPEC}/tasks.md": tasks, "src/app.txt": "hi\n"}})
+    assert build(FakeEngine(stages=done))[0].process(make_issue(description=AMEND_TEXT)).status == "pr_opened"
 
 
 def test_amend_without_a_resolvable_spec_is_handed_back_with_a_question(build):

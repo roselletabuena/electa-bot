@@ -9,6 +9,8 @@ from pathlib import Path
 _KEY = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 _FOLDER = re.compile(r"^(\d{3,})-")
 _TASK_OPEN = re.compile(r"^\s*[-*]\s*\[ \]", re.MULTILINE)
+_TASK_PREFIX = re.compile(r"^\s*[-*]\s*\[ \]\s*(?:T\d+\s*)?(?:\[[^\]]*\]\s*)*")
+_CHECK_COMMAND = re.compile(r"npm run|npx|quality gates?", re.IGNORECASE)
 
 
 @dataclass
@@ -63,3 +65,13 @@ def unfinished_tasks(tasks_md: str, tag: str = "") -> list[str]:
     """Unticked checklist lines in tasks.md, optionally only those mentioning `tag` (e.g. a ticket key)."""
     open_lines = [line.strip() for line in tasks_md.splitlines() if _TASK_OPEN.match(line)]
     return [line for line in open_lines if tag in line]
+
+
+def is_check_task(line: str) -> bool:
+    """A task that only runs the repo's checks ("Run quality gates (`npm run lint`, ...)").
+
+    The engine runs headless and cannot execute them, and the pipeline runs `check_commands` itself after
+    the stage, so such a task never blocks the implement stage.
+    """
+    text = _TASK_PREFIX.sub("", line, count=1)
+    return text[:4].lower() == "run " and bool(_CHECK_COMMAND.search(text))

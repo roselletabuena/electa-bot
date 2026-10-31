@@ -37,12 +37,14 @@ After the readiness check the bot routes each ticket (`orchestrator.py`), cheape
 
 | Workflow | What runs |
 |---|---|
-| `bugfix` | one engine call following the repo's spec-aware bugfix method (class A-D); needs a changed test file; class D hands the ticket back with no code |
+| `bugfix` | one engine call following the repo's spec-aware bugfix method (class A-D); needs a changed test file; class D, or a class B/C whose spec change is wide (the agent ends with `ESCALATE: amend`), hands the ticket back with no code |
 | `feature` | `specify` -> `plan` -> `tasks` -> `implement` into a new `specs/<next number>-<slug>/`; each stage's artifact is verified before the next |
 | `amend` | `spec` -> `plan` -> `tasks` -> `implement` on the existing spec folder; new tasks are tagged `[KEY]` and only those are implemented |
 | `task` | the original single-shot minimal change |
 
-An amend with no resolvable spec is handed back to the ticket with a question instead of guessing.
+An amend with no resolvable spec is handed back to the ticket with a question instead of guessing. A bugfix that escalates is handed back too: the comment explains why and asks for the `bot-amend` label plus the spec folder, so a human decides before a wide spec change is made.
+
+Tasks that only run tests, lint or typecheck (for example "Run quality gates (`npm run lint`)") never block the `implement` stage. The engine runs headless and cannot execute commands; the bot runs `check_commands` itself afterwards, and the prompts tell the agent not to write such tasks. When a stage is incomplete the engine's reply is logged as a warning.
 Feature/amend runs may also write `spec_dir` and use `spec_max_diff_lines`; they then share the normal setup, checks, repair rounds, commit and draft PR.
 
 ## Editing prompts
